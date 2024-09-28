@@ -128,7 +128,7 @@ export class ActionButton {
 				command: 'git.commit',
 				title: l10n.t('{0} Continue', '$(check)'),
 				tooltip: this.state.isCommitInProgress ? l10n.t('Continuing Rebase...') : l10n.t('Continue Rebase'),
-				arguments: [this.repository.sourceControl, '']
+				arguments: [this.repository.sourceControl, null]
 			};
 		}
 
@@ -138,7 +138,7 @@ export class ActionButton {
 				command: 'git.commit',
 				title: l10n.t('{0} Commit', '$(check)'),
 				tooltip: this.state.isCommitInProgress ? l10n.t('Committing Changes...') : l10n.t('Commit Changes'),
-				arguments: [this.repository.sourceControl, '']
+				arguments: [this.repository.sourceControl, null]
 			};
 		}
 
@@ -211,12 +211,12 @@ export class ActionButton {
 			command: {
 				command: 'git.sync',
 				title: l10n.t('{0} Sync Changes{1}{2}', icon, behind, ahead),
+				shortTitle: `${icon}${behind}${ahead}`,
 				tooltip: this.state.isSyncInProgress ?
 					l10n.t('Synchronizing Changes...')
 					: this.repository.syncTooltip,
 				arguments: [this.repository.sourceControl],
 			},
-			description: `${icon}${behind}${ahead}`,
 			enabled: !this.state.isCheckoutInProgress && !this.state.isSyncInProgress
 		};
 	}

@@ -3,31 +3,31 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ITreeNavigator } from 'vs/base/browser/ui/tree/tree';
-import * as nls from 'vs/nls';
-import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
-import { ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
-import { getSelectionKeyboardEvent, WorkbenchCompressibleObjectTree } from 'vs/platform/list/browser/listService';
-import { IViewsService } from 'vs/workbench/common/views';
-import { searchRemoveIcon, searchReplaceIcon } from 'vs/workbench/contrib/search/browser/searchIcons';
-import { SearchView } from 'vs/workbench/contrib/search/browser/searchView';
-import * as Constants from 'vs/workbench/contrib/search/common/constants';
-import { IReplaceService } from 'vs/workbench/contrib/search/browser/replace';
-import { arrayContainsElementOrParent, FileMatch, FolderMatch, Match, MatchInNotebook, RenderableMatch, SearchResult } from 'vs/workbench/contrib/search/browser/searchModel';
-import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
-import { ISearchConfiguration, ISearchConfigurationProperties } from 'vs/workbench/services/search/common/search';
-import { IUriIdentityService } from 'vs/platform/uriIdentity/common/uriIdentity';
-import { ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
-import { Action2, MenuId, registerAction2 } from 'vs/platform/actions/common/actions';
-import { KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
-import { KeyCode, KeyMod } from 'vs/base/common/keyCodes';
-import { category, getElementsToOperateOn, getSearchView, shouldRefocus } from 'vs/workbench/contrib/search/browser/searchActionsBase';
-import { equals } from 'vs/base/common/arrays';
+import { ITreeNavigator } from '../../../../base/browser/ui/tree/tree.js';
+import * as nls from '../../../../nls.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { getSelectionKeyboardEvent, WorkbenchCompressibleAsyncDataTree } from '../../../../platform/list/browser/listService.js';
+import { IViewsService } from '../../../services/views/common/viewsService.js';
+import { searchRemoveIcon, searchReplaceIcon } from './searchIcons.js';
+import { SearchView } from './searchView.js';
+import * as Constants from '../common/constants.js';
+import { IReplaceService } from './replace.js';
+import { arrayContainsElementOrParent, FileMatch, FolderMatch, Match, MatchInNotebook, RenderableMatch, SearchResult, TextSearchResult } from './searchModel.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { ISearchConfiguration, ISearchConfigurationProperties } from '../../../services/search/common/search.js';
+import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
+import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
+import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
+import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
+import { category, getElementsToOperateOn, getSearchView, shouldRefocus } from './searchActionsBase.js';
+import { equals } from '../../../../base/common/arrays.js';
 
 
 //#region Interfaces
 export interface ISearchActionContext {
-	readonly viewer: WorkbenchCompressibleObjectTree<RenderableMatch>;
+	readonly viewer: WorkbenchCompressibleAsyncDataTree<SearchResult, RenderableMatch>;
 	readonly element: RenderableMatch;
 }
 
@@ -54,16 +54,13 @@ registerAction2(class RemoveAction extends Action2 {
 	constructor(
 	) {
 		super({
-			id: Constants.RemoveActionId,
-			title: {
-				value: nls.localize('RemoveAction.label', "Dismiss"),
-				original: 'Dismiss'
-			},
+			id: Constants.SearchCommandIds.RemoveActionId,
+			title: nls.localize2('RemoveAction.label', "Dismiss"),
 			category,
 			icon: searchRemoveIcon,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				when: ContextKeyExpr.and(Constants.SearchViewVisibleKey, Constants.FileMatchOrMatchFocusKey),
+				when: ContextKeyExpr.and(Constants.SearchContext.SearchViewVisibleKey, Constants.SearchContext.FileMatchOrMatchFocusKey),
 				primary: KeyCode.Delete,
 				mac: {
 					primary: KeyMod.CtrlCmd | KeyCode.Backspace,
@@ -84,7 +81,7 @@ registerAction2(class RemoveAction extends Action2 {
 		});
 	}
 
-	run(accessor: ServicesAccessor, context: ISearchActionContext | undefined): void {
+	async run(accessor: ServicesAccessor, context: ISearchActionContext | undefined): Promise<void> {
 		const viewsService = accessor.get(IViewsService);
 		const configurationService = accessor.get(IConfigurationService);
 		const searchView = getSearchView(viewsService);
@@ -116,7 +113,7 @@ registerAction2(class RemoveAction extends Action2 {
 		let nextFocusElement;
 		const shouldRefocusMatch = shouldRefocus(elementsToRemove, focusElement);
 		if (focusElement && shouldRefocusMatch) {
-			nextFocusElement = getElementToFocusAfterRemoved(viewer, focusElement, elementsToRemove);
+			nextFocusElement = await getElementToFocusAfterRemoved(viewer, focusElement, elementsToRemove);
 		}
 
 		const searchResult = searchView.searchResult;
@@ -125,9 +122,11 @@ registerAction2(class RemoveAction extends Action2 {
 			searchResult.batchRemove(elementsToRemove);
 		}
 
+		await searchView.refreshTreePromiseSerializer; // wait for refreshTree to finish
+
 		if (focusElement && shouldRefocusMatch) {
 			if (!nextFocusElement) {
-				nextFocusElement = getLastNodeFromSameType(viewer, focusElement);
+				nextFocusElement = await getLastNodeFromSameType(viewer, focusElement);
 			}
 
 			if (nextFocusElement && !arrayContainsElementOrParent(nextFocusElement, elementsToRemove)) {
@@ -148,28 +147,25 @@ registerAction2(class ReplaceAction extends Action2 {
 	constructor(
 	) {
 		super({
-			id: Constants.ReplaceActionId,
-			title: {
-				value: nls.localize('match.replace.label', "Replace"),
-				original: 'Replace'
-			},
+			id: Constants.SearchCommandIds.ReplaceActionId,
+			title: nls.localize2('match.replace.label', "Replace"),
 			category,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				when: ContextKeyExpr.and(Constants.SearchViewVisibleKey, Constants.ReplaceActiveKey, Constants.MatchFocusKey, Constants.IsEditableItemKey),
+				when: ContextKeyExpr.and(Constants.SearchContext.SearchViewVisibleKey, Constants.SearchContext.ReplaceActiveKey, Constants.SearchContext.MatchFocusKey, Constants.SearchContext.IsEditableItemKey),
 				primary: KeyMod.Shift | KeyMod.CtrlCmd | KeyCode.Digit1,
 			},
 			icon: searchReplaceIcon,
 			menu: [
 				{
 					id: MenuId.SearchContext,
-					when: ContextKeyExpr.and(Constants.ReplaceActiveKey, Constants.MatchFocusKey, Constants.IsEditableItemKey),
+					when: ContextKeyExpr.and(Constants.SearchContext.ReplaceActiveKey, Constants.SearchContext.MatchFocusKey, Constants.SearchContext.IsEditableItemKey),
 					group: 'search',
 					order: 1
 				},
 				{
 					id: MenuId.SearchActionMenu,
-					when: ContextKeyExpr.and(Constants.ReplaceActiveKey, Constants.MatchFocusKey, Constants.IsEditableItemKey),
+					when: ContextKeyExpr.and(Constants.SearchContext.ReplaceActiveKey, Constants.SearchContext.MatchFocusKey, Constants.SearchContext.IsEditableItemKey),
 					group: 'inline',
 					order: 1
 				}
@@ -187,15 +183,12 @@ registerAction2(class ReplaceAllAction extends Action2 {
 	constructor(
 	) {
 		super({
-			id: Constants.ReplaceAllInFileActionId,
-			title: {
-				value: nls.localize('file.replaceAll.label', "Replace All"),
-				original: 'Replace All'
-			},
+			id: Constants.SearchCommandIds.ReplaceAllInFileActionId,
+			title: nls.localize2('file.replaceAll.label', "Replace All"),
 			category,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				when: ContextKeyExpr.and(Constants.SearchViewVisibleKey, Constants.ReplaceActiveKey, Constants.FileFocusKey, Constants.IsEditableItemKey),
+				when: ContextKeyExpr.and(Constants.SearchContext.SearchViewVisibleKey, Constants.SearchContext.ReplaceActiveKey, Constants.SearchContext.FileFocusKey, Constants.SearchContext.IsEditableItemKey),
 				primary: KeyMod.Shift | KeyMod.CtrlCmd | KeyCode.Digit1,
 				secondary: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter],
 			},
@@ -203,13 +196,13 @@ registerAction2(class ReplaceAllAction extends Action2 {
 			menu: [
 				{
 					id: MenuId.SearchContext,
-					when: ContextKeyExpr.and(Constants.ReplaceActiveKey, Constants.FileFocusKey, Constants.IsEditableItemKey),
+					when: ContextKeyExpr.and(Constants.SearchContext.ReplaceActiveKey, Constants.SearchContext.FileFocusKey, Constants.SearchContext.IsEditableItemKey),
 					group: 'search',
 					order: 1
 				},
 				{
 					id: MenuId.SearchActionMenu,
-					when: ContextKeyExpr.and(Constants.ReplaceActiveKey, Constants.FileFocusKey, Constants.IsEditableItemKey),
+					when: ContextKeyExpr.and(Constants.SearchContext.ReplaceActiveKey, Constants.SearchContext.FileFocusKey, Constants.SearchContext.IsEditableItemKey),
 					group: 'inline',
 					order: 1
 				}
@@ -226,15 +219,12 @@ registerAction2(class ReplaceAllInFolderAction extends Action2 {
 	constructor(
 	) {
 		super({
-			id: Constants.ReplaceAllInFolderActionId,
-			title: {
-				value: nls.localize('file.replaceAll.label', "Replace All"),
-				original: 'Replace All'
-			},
+			id: Constants.SearchCommandIds.ReplaceAllInFolderActionId,
+			title: nls.localize2('file.replaceAll.label', "Replace All"),
 			category,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				when: ContextKeyExpr.and(Constants.SearchViewVisibleKey, Constants.ReplaceActiveKey, Constants.FolderFocusKey, Constants.IsEditableItemKey),
+				when: ContextKeyExpr.and(Constants.SearchContext.SearchViewVisibleKey, Constants.SearchContext.ReplaceActiveKey, Constants.SearchContext.FolderFocusKey, Constants.SearchContext.IsEditableItemKey),
 				primary: KeyMod.Shift | KeyMod.CtrlCmd | KeyCode.Digit1,
 				secondary: [KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter],
 			},
@@ -242,13 +232,13 @@ registerAction2(class ReplaceAllInFolderAction extends Action2 {
 			menu: [
 				{
 					id: MenuId.SearchContext,
-					when: ContextKeyExpr.and(Constants.ReplaceActiveKey, Constants.FolderFocusKey, Constants.IsEditableItemKey),
+					when: ContextKeyExpr.and(Constants.SearchContext.ReplaceActiveKey, Constants.SearchContext.FolderFocusKey, Constants.SearchContext.IsEditableItemKey),
 					group: 'search',
 					order: 1
 				},
 				{
 					id: MenuId.SearchActionMenu,
-					when: ContextKeyExpr.and(Constants.ReplaceActiveKey, Constants.FolderFocusKey, Constants.IsEditableItemKey),
+					when: ContextKeyExpr.and(Constants.SearchContext.ReplaceActiveKey, Constants.SearchContext.FolderFocusKey, Constants.SearchContext.IsEditableItemKey),
 					group: 'inline',
 					order: 1
 				}
@@ -265,13 +255,13 @@ registerAction2(class ReplaceAllInFolderAction extends Action2 {
 
 //#region Helpers
 
-function performReplace(accessor: ServicesAccessor,
-	context: ISearchActionContext | undefined): void {
+async function performReplace(accessor: ServicesAccessor,
+	context: ISearchActionContext | undefined) {
 	const configurationService = accessor.get(IConfigurationService);
 	const viewsService = accessor.get(IViewsService);
 
 	const viewlet: SearchView | undefined = getSearchView(viewsService);
-	const viewer: WorkbenchCompressibleObjectTree<RenderableMatch> | undefined = context?.viewer ?? viewlet?.getControl();
+	const viewer: WorkbenchCompressibleAsyncDataTree<SearchResult, RenderableMatch> | undefined = context?.viewer ?? viewlet?.getControl();
 
 	if (!viewer) {
 		return;
@@ -291,18 +281,20 @@ function performReplace(accessor: ServicesAccessor,
 	}
 	let nextFocusElement;
 	if (focusElement) {
-		nextFocusElement = getElementToFocusAfterRemoved(viewer, focusElement, elementsToReplace);
+		nextFocusElement = await getElementToFocusAfterRemoved(viewer, focusElement, elementsToReplace);
 	}
 
 	const searchResult = viewlet?.searchResult;
 
 	if (searchResult) {
-		searchResult.batchReplace(elementsToReplace);
+		await searchResult.batchReplace(elementsToReplace);
 	}
+
+	await viewlet?.refreshTreePromiseSerializer; // wait for refreshTree to finish
 
 	if (focusElement) {
 		if (!nextFocusElement) {
-			nextFocusElement = getLastNodeFromSameType(viewer, focusElement);
+			nextFocusElement = await getLastNodeFromSameType(viewer, focusElement);
 		}
 
 		if (nextFocusElement) {
@@ -356,9 +348,18 @@ function compareLevels(elem1: RenderableMatch, elem2: RenderableMatch) {
 			return -1;
 		}
 
-	} else {
+	} else if (elem2 instanceof FolderMatch) {
 		// FolderMatch
-		if (elem2 instanceof FolderMatch) {
+		if (elem2 instanceof TextSearchResult) {
+			return -1;
+		} else if (elem2 instanceof FolderMatch) {
+			return 0;
+		} else {
+			return 1;
+		}
+	} else {
+		// textSearchResult
+		if (elem2 instanceof TextSearchResult) {
 			return 0;
 		} else {
 			return 1;
@@ -369,17 +370,17 @@ function compareLevels(elem1: RenderableMatch, elem2: RenderableMatch) {
 /**
  * Returns element to focus after removing the given element
  */
-export function getElementToFocusAfterRemoved(viewer: WorkbenchCompressibleObjectTree<RenderableMatch>, element: RenderableMatch, elementsToRemove: RenderableMatch[]): RenderableMatch | undefined {
+export async function getElementToFocusAfterRemoved(viewer: WorkbenchCompressibleAsyncDataTree<SearchResult, RenderableMatch>, element: RenderableMatch, elementsToRemove: RenderableMatch[]): Promise<RenderableMatch | undefined> {
 	const navigator: ITreeNavigator<any> = viewer.navigate(element);
 	if (element instanceof FolderMatch) {
 		while (!!navigator.next() && (!(navigator.current() instanceof FolderMatch) || arrayContainsElementOrParent(navigator.current(), elementsToRemove))) { }
 	} else if (element instanceof FileMatch) {
 		while (!!navigator.next() && (!(navigator.current() instanceof FileMatch) || arrayContainsElementOrParent(navigator.current(), elementsToRemove))) {
-			viewer.expand(navigator.current());
+			await viewer.expand(navigator.current());
 		}
 	} else {
 		while (navigator.next() && (!(navigator.current() instanceof Match) || arrayContainsElementOrParent(navigator.current(), elementsToRemove))) {
-			viewer.expand(navigator.current());
+			await viewer.expand(navigator.current());
 		}
 	}
 	return navigator.current();
@@ -388,16 +389,24 @@ export function getElementToFocusAfterRemoved(viewer: WorkbenchCompressibleObjec
 /***
  * Finds the last element in the tree with the same type as `element`
  */
-export function getLastNodeFromSameType(viewer: WorkbenchCompressibleObjectTree<RenderableMatch>, element: RenderableMatch): RenderableMatch | undefined {
+export async function getLastNodeFromSameType(viewer: WorkbenchCompressibleAsyncDataTree<SearchResult, RenderableMatch>, element: RenderableMatch): Promise<RenderableMatch | undefined> {
 	let lastElem: RenderableMatch | null = viewer.lastVisibleElement ?? null;
 
 	while (lastElem) {
 		const compareVal = compareLevels(element, lastElem);
 		if (compareVal === -1) {
-			viewer.expand(lastElem);
+			const expanded = await viewer.expand(lastElem);
+			if (!expanded) {
+				return lastElem;
+			}
 			lastElem = viewer.lastVisibleElement;
 		} else if (compareVal === 1) {
-			lastElem = viewer.getParentElement(lastElem);
+			const potentialLastElem = viewer.getParentElement(lastElem);
+			if (potentialLastElem instanceof SearchResult) {
+				break;
+			} else {
+				lastElem = potentialLastElem;
+			}
 		} else {
 			return lastElem;
 		}
